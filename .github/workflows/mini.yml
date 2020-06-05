@@ -1,0 +1,154 @@
+#=================================================
+# https://github.com/P3TERX/Actions-OpenWrt
+# Description: Build OpenWrt using GitHub Actions
+# Lisence: MIT
+# Author: P3TERX
+# Blog: https://p3terx.com
+#=================================================
+
+name: X86-64-OpenWrt-mini ★编译★
+
+on:
+  repository_dispatch:
+  #发布release编译
+  release:
+    types: published
+  push:
+    branches:
+      - master
+    # 在下方指定你的配置文件名.config     
+    paths:      
+      - 'mini.config'
+  #北京时区是东八区，领先UTC 8个小时，每周六凌晨2点编译
+  schedule:
+    - cron: 0 18 * * 6
+  #点[★star]一键编译    
+  watch:
+    types: started
+
+env:
+  # 在这里指定你的OpenWrt的仓库地址URL和分支
+  REPO_URL: https://github.com/coolsnowwolf/lede
+  REPO_BRANCH: master
+  # 在这里指定你的配置文件名.config
+  CONFIG_FILE: 'mini.config'
+  # 编译前运行自定义脚本
+  DIY_SH: mini.sh
+  #SSH开关false/true
+  SSH_ACTIONS: false
+  #上传BIN文件开关false/true
+  UPLOAD_BIN_DIR: false
+  #上传FIRMWARE固件开关false/true
+  UPLOAD_FIRMWARE: true
+  #上传FIRMWARE固件到WeTransfer开关false/true
+  UPLOAD_COWTRANSFER: true
+  #上传FIRMWARE固件到奶牛快传开关false/true
+  UPLOAD_WETRANSFER: false
+  #时区
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
+
+    steps:
+    - name: Checkout 获取当前源码
+      uses: actions/checkout@master
+
+    - name: Initialization environment 安装编译环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo swapoff /swapfile
+        sudo rm -rf /swapfile /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3.5 unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib antlr3 gperf
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        curl -fsSL https://raw.githubusercontent.com/P3TERX/dotfiles/master/.bashrc >> ~/.bashrc
+
+    - name: Clone source code 克隆OpenWrt仓库
+      run: git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+
+   #- name: Update package 添加插件
+   #  working-directory: ./openwrt
+   #  run: |            
+   #      git clone https://github.com/Leo-Jo-My/luci-theme-opentomato package/luci-theme-opentomato
+    
+    - name: Update feeds 更新feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: Install feeds 安装feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: Load custom configuration 载入自定义配置
+      run: |
+        [ -e files ] && mv files openwrt/files
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        chmod +x $DIY_SH
+        cd openwrt
+        ../$DIY_SH
+
+    # 云menuconfig（SSH 连接到 Actions进行menuconfig），去掉下面2行代码前面的#即可使用
+    # 复制 SSH 连接命令粘贴到终端内执行，或者复制链接在浏览器中打开使用网页终端。（网页终端可能会遇到黑屏的情况，按 Ctrl + C 即可）
+    # 然后输入cd openwrt && make menuconfig
+    # 完成后按快捷键Ctrl+D或执行exit命令退出，后续编译工作将自动进行。
+    - name: SSH connection to Actions SSH登陆配置
+      uses: P3TERX/debugger-action@master
+      if: env.SSH_ACTIONS == 'true' || contains(github.event.action, 'ssh')
+
+    - name: Download package 下载编译所需的软件包
+      id: package
+      run: |
+        cd openwrt
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile the firmware 编译固件中
+      id: compile
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 V=s
+        echo "::set-output name=status::success"
+
+    - name: Upload bin directory 上传bin文件夹
+      uses: actions/upload-artifact@master
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: OpenWrt_bin
+        path: openwrt/bin
+
+    - name: Organize files 整理文件
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "::set-env name=FIRMWARE::$PWD"
+        echo "::set-output name=status::success"
+
+    - name: Upload firmware directory 上传固件
+      uses: actions/upload-artifact@master
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware
+        path: ${{ env.FIRMWARE }}
+
+    - name: Upload firmware to cowtransfer 上传固件到 WeTransfer
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && !cancelled()
+      run: |
+        curl -fsSL git.io/file-transfer | sh
+        ./transfer cow --block 2621440 -s -p 99 -t 3 --hash --no-progress ${FIRMWARE} 2>&1 | tee cowtransfer.log
+        echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
+
+    - name: Upload firmware to WeTransfer 上传固件到奶牛快传
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
+      run: |
+        curl -fsSL git.io/file-transfer | sh
+        ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
+        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
