@@ -33,7 +33,7 @@ env:
   # 在这里指定你的配置文件名.config
   CONFIG_FILE: 'custom.config'
   # 编译前运行自定义脚本
-  DIY_SH: custom.sh
+  DIY_P1_SH: custom.sh
   #SSH开关false/true
   SSH_ACTIONS: false
   #上传BIN文件开关false/true
