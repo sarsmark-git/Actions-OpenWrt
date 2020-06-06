@@ -18,7 +18,7 @@ on:
       - master
     # 在下方指定你的配置文件名.config     
     paths:      
-      - 'custom.config'
+      - '.config'
   #北京时区是东八区，领先UTC 8个小时，每周六凌晨2点编译
   schedule:
     - cron: 0 18 * * *
